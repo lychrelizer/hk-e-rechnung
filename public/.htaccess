@@ -1,0 +1,7 @@
+RewriteEngine On
+# Authorization-Header an PHP (CGI/FPM) durchreichen
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+# Alles auf den Front-Controller
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ index.php [QSA,L]
