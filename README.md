@@ -19,6 +19,9 @@ JSON zusammen speichern; `sourceSha256` verbindet den Bericht mit dem Original.
 php bin/extract.php rechnung.pdf
 php bin/extract.php rechnung.pdf --ocr
 php tests/extraction.php
+php tests/extraction-layouts.php
+php bin/inspect-corpus.php
+php tests/corpus.php
 ```
 
 CLI-Berichte gehen auf stdout, Fehler auf stderr. Bei Umleitung unter Windows
@@ -64,18 +67,69 @@ Netto + Steuer gegen Brutto. Fehlende oder widersprüchliche Operanden ergeben
 
 ## Testumfang und Grenzen
 
-`php tests/extraction.php` erzeugt synthetische PDFs in `tests/fixtures/` und
+`php tests/extraction.php` erzeugt synthetische PDFs in einem temporären Verzeichnis und
 prüft digitale Erkennung, Raster-Scan mit tatsächlicher deutscher OCR,
 Feldprovenienz, fehlende Werte, deutsche Zahlen, widersprüchliche Nummern,
 gemischte Steuerzeilen und falsche Bruttosummen. Die Scanvorlage wurde visuell
-geprüft. Es liegen bislang keine echten Kundenrechnungen als Testkorpus vor.
+geprüft. `tests/extraction-layouts.php` enthält anonymisierte Regressionstests
+für beobachtete Layoutmuster, ohne echte Rechnungsinhalte im Quellcode.
+
+## Lokales Beispielkorpus
+
+Zehn echte PDFs (zwölf Seiten, davon vier OCR-Seiten) wurden lokal ausgewertet:
+neun Rechnungsdokumente und ein Anschreiben. Die Originale bleiben unverändert
+im bereits ignorierten Verzeichnis `Beispielrechnungen/`. Das gilt auch für
+abgeleitete Texte, Berichte, Bilder und das lokale Testmanifest `expected.json`.
+Die Änderung an `.gitignore` stammt vom Benutzer.
+
+`php bin/inspect-corpus.php` verarbeitet alle PDFs in diesem Verzeichnis und
+schreibt `extraction-reports/summary.md`, `summary.json` und je PDF einen
+vollständigen JSON-Bericht sowie einen diagnostischen Textauszug. Es werden
+auch personenbezogene Rechnungsinhalte ausgegeben; die Dateien bleiben lokal.
+Ein abweichendes Korpusverzeichnis kann als erstes Argument übergeben werden.
+
+`php tests/corpus.php` prüft die aktuellen PDFs gegen das lokale, separat
+festgelegte `expected.json`. SHA-256 verhindert die versehentliche Anwendung
+alter Erwartungen auf geänderte Originale. Ohne privates Korpus endet dieser
+optionale Test mit Exitcode 2; die anonymisierten Tests sind unabhängig davon.
+Neue PDF-Dateien werden im Analysewerkzeug erfasst, sind aber erst nach
+Ergänzung der Erwartungen Teil dieses Regressionstests. Erwartete Werte nicht
+ungeprüft aus der Extraktion übernehmen.
+
+Aktueller Stand dieses kleinen Korpus: acht eindeutige Nummernvorschläge bei
+neun Rechnungsdokumenten; eine PDF mit Hauptrechnung und gesonderter Laboranlage
+bleibt wegen zweier Rechnungsnummern widersprüchlich. Alle neun Rechnungsdaten
+werden vorgeschlagen; das Anschreiben bleibt ohne Nummer/Datum als
+`unclassified` gekennzeichnet. Bei fünf Dokumenten ist Netto + Steuer = Brutto
+anhand erkannter Originalwerte prüfbar und stimmig. Dies ist keine Aussage zur
+allgemeinen Erkennungsquote. Zwölf unvollständige Positionskandidaten werden
+zusätzlich angezeigt; vollständige Positionen im ursprünglichen Format werden
+bei diesen PDFs noch nicht erkannt.
+
+Berichtsschema Version 2 ergänzt `documentStatus` und `lineCandidates`.
+Positionskandidaten werden nur bei passenden Tabellenüberschriften erkannt:
+Menge/Artikel/Text/Einzelpreis, Ticketpreis/Menge, Leistung/Zeitraum/Steuersatz,
+nummerierte Nettoleistungen sowie Artikel/Betrag. Sie enthalten ausschließlich
+belegte Teilfelder, fehlende Angaben und die Tabellenüberschrift als Fundstelle.
+Nur eine explizite Nettoüberschrift setzt `amountBasis: net`; ansonsten bleibt
+die Preisbasis `unknown`. Folgezeilen können noch zur Beschreibung gehören.
+Diese Kandidaten fließen nicht in die Prüfungen vollständiger Positionen ein.
 
 Unterstützte Positionszeile:
 `1 Beratung 2 Std 100,00 19 % 200,00`.
 Mehrzeilige Beschreibungen, andere Spaltenreihenfolgen, Artikelnummern,
 Rabatte, Zuschläge, Anzahlungen, Steuerbefreiungen und Adressrollen werden noch
 nicht verlässlich erkannt. Verkäufer-/Käuferrollen werden nicht geraten.
-Datumsfelder benötigen aktuell explizite Bezeichnungen und `TT.MM.JJJJ`.
+Datumsfelder benötigen `TT.MM.JJJJ`. Neben Rechnungs-/Belegdatum wird ein
+eigenständiges `Datum` im oberen Seitenbereich mit Rechnungsmerkmalen als
+Vorschlag berücksichtigt; ein Geburtstag oder freistehendes Anschreibendatum
+wird nicht übernommen. `Nummer: ... vom ...` wird nur direkt nach der
+Überschrift `Rechnung` verwendet. Rechnungsnummern müssen mindestens eine
+Ziffer enthalten; rein alphabetische Nummern werden aktuell nicht erkannt.
+Nummerngruppen mit Leerzeichen bleiben erhalten. `€` wird als EUR normalisiert.
+IBAN-Kandidaten werden normalisiert und auf MOD-97, Format und bei deutschen
+IBANs auf Länge geprüft. Maskierte Konten bleiben ungültig; Kontoinhaber und
+Zahlungsrichtung werden dadurch nicht festgestellt.
 Zahlenmuster sind auf deutsche Komma-Dezimalzahlen ausgelegt.
 Mehrere unterschiedliche ausgewiesene Steuerbeträge werden derzeit als Konflikt
 behandelt; eine vollständige beleggestützte Steueraufstellung ist noch offen.
@@ -87,6 +141,6 @@ eingescannten Teilbereiche auf ansonsten textreichen Seiten. Dafür gibt es
 Kein interaktives Korrigieren/Bestätigen mit Audit-Historie und keine automatische
 Formularübernahme in dieser ersten Version.
 
-Nächster fachlicher Schritt: anonymisierte echte Rechnungen mit erwarteten
-Feldwerten und Positionen als Regressionstestkorpus ergänzen; darauf basierend
-Spalten-/Tabellenerkennung, Steueraufstellungen und Rollen-/Adressblöcke ausbauen.
+Nächster fachlicher Schritt: anhand des Korpus mehrzeilige Tabellenpositionen,
+Brutto-/Nettopreisbasis, Rabatte und Dokumentanlagen zuverlässig auflösen;
+anschließend Steueraufstellungen und Rollen-/Adressblöcke ausbauen.

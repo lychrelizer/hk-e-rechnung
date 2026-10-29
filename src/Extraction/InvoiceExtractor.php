@@ -14,25 +14,52 @@ final class InvoiceExtractor
 
     public function extract(array $pages): array
     {
-        $result = ['schemaVersion' => 1, 'pages' => $pages, 'fields' => [], 'lines' => [], 'checks' => [], 'warnings' => ['Automatische Vorschläge sind nicht bestätigt. Verkäufer und Käufer werden ohne eindeutige Rollenbezeichnung nicht zugeordnet.']];
+        $result = ['schemaVersion' => 2, 'pages' => $pages, 'fields' => [], 'lines' => [], 'lineCandidates' => [], 'checks' => [], 'warnings' => ['Automatische Vorschläge sind nicht bestätigt. Verkäufer und Käufer werden ohne eindeutige Rollenbezeichnung nicht zugeordnet.']];
         $patterns = [
-            'invoice.number' => '/\bRechnungs(?:nummer|nr\.?|[- ]Nr\.?)\s*:?\s*([A-Z0-9][A-Z0-9\/._-]*)/iu',
-            'invoice.date' => '/\bRechnungsdatum\s*:?\s*(\d{2}\.\d{2}\.\d{4})/iu',
+            'invoice.number' => '/\b(?:Rechnungs(?:nummer|[- ]?Nr\.?)|Rechnung(?:\s+Nr\.?)?|RG[- .]*(?:Nummer|Nr\.?))\s*:?\s*((?=[A-Z0-9\/._-]*\d)[A-Z0-9][A-Z0-9\/._-]*(?: +\d{2,})*)/iu',
+            'invoice.date' => '/\b(?:Rechnungsdatum|Belegdatum)\s*:?\s*(\d{2}\.\d{2}\.\d{4})/iu',
             'invoice.dueDate' => '/\b(?:Fällig am|Fälligkeitsdatum)\s*:?\s*(\d{2}\.\d{2}\.\d{4})/iu',
             'invoice.deliveryDate' => '/\b(?:Lieferdatum|Leistungsdatum)\s*:?\s*(\d{2}\.\d{2}\.\d{4})/iu',
-            'invoice.currency' => '/\b(EUR|USD|CHF|GBP)\b/u',
-            'payment.iban' => '/\bIBAN\s*:?\s*([A-Z]{2}\d{2}(?:\s?[A-Z0-9]){11,30})\b/u',
-            'totals.net' => '/^(?:Nettosumme|Gesamt netto|Nettobetrag|Summe netto)\s*:?\s*(-?[\d.]+,\d{2})\b/iu',
-            'totals.tax' => '/^(?:Umsatzsteuer|MwSt\.?|USt\.?)\s+(?:\d+(?:,\d+)?\s*%\s*:?\s*)(-?[\d.]+,\d{2})\b/iu',
-            'totals.gross' => '/^(?:Bruttobetrag|Gesamtbetrag|Rechnungsbetrag|Gesamt brutto)\s*:?\s*(-?[\d.]+,\d{2})\b/iu',
+            'invoice.currency' => '/(\b(?:EUR|USD|CHF|GBP)\b|€)/u',
+            'payment.iban' => '/\bIBAN\s*:?\s*(DE\s*\d{2}(?:\s*\d){18}(?!\s*\d)|[A-Z]{2}\s*\d{2}(?:\s?[A-Z0-9]){11,30})\b/u',
+            'totals.net' => '/^(?:Nettosumme|Gesamt netto|Nettobetrag|Summe netto|Netto-Rechnungsendbetrag|Rechnungsbetrag netto|Zwischensumme\s*\(netto\))\s*:?\s*(-?[\d.]+,\d{2})\b/iu',
+            'totals.tax' => '/^(?:Positionen\s+)?(?:zzgl\.\s*)?(?:(?:Umsatzsteuer|Mehrwertsteuer|MwSt\.?|USt\.?)\s+\d+(?:,\d+)?\s*%|\+?\d+(?:,\d+)?\s*%\s*(?:Umsatzsteuer|Mehrwertsteuer|MwSt\.?|USt\.?))(?:\s+reduziert)?(?:\s+auf\s+[\d.]+,\d{2}\s*(?:EUR|€)?)?\s*:?\s*(-?[\d.]+,\d{2})\s*(?:EUR|€)?\s*$/iu',
+            'totals.gross' => '/^(?:Bruttobetrag|Gesamtbetrag|Rechnungsbetrag(?: brutto)?|Gesamt brutto|Rechnungsendbetrag|Endsumme|Zahlbetrag)\s*:?\s*(-?[\d.]+,\d{2})\b/iu',
         ];
         foreach ($pages as $page) {
             foreach ($page['warnings'] as $warning) { $result['warnings'][] = 'Seite ' . $page['number'] . ': ' . $warning; }
-            foreach ($this->rows($page['words']) as $words) {
+            $pageRows = $this->rows($page['words']);
+            $previousText = '';
+            $table = null;
+            $tableHeader = [];
+            foreach ($pageRows as $words) {
                 $text = implode(' ', array_column($words, 'text'));
-                foreach ($patterns as $key => $pattern) {
+                // Layout families are activated by table headings, never by the vendor name.
+                if (preg_match('/^Pos\.?\s+Menge\s+Art\.-Nr\.\s+Text\s+Einzelpreis/u', $text)) { $table = 'quantity_article'; $tableHeader = $words; }
+                elseif (preg_match('/^Position\s+Einzelpreis\s+Menge\s+Preis/u', $text)) { $table = 'ticket'; $tableHeader = $words; }
+                elseif (preg_match('/^Vertragsnr\.\s+Leistung\s+Zeitraum\s+Total\s+EUR\s+UST/u', $text)) { $table = 'service_period'; $tableHeader = $words; }
+                elseif (preg_match('/^Zeitraum\b.*\bDetails\b.*\bNetto$/u', $text)) { $table = 'net_amount'; $tableHeader = $words; }
+                elseif (preg_match('/^Beschreibung\s+Betrag$/u', $text)) { $table = 'article_amount'; $tableHeader = $words; }
+                elseif (preg_match('/^(?:Zwischensumme|Summe|Nettosumme|Gesamt|Rechnungsbetrag|Wichtige Hinweise)\b/u', $text)) { $table = null; }
+                if ($table !== null) {
+                    $partial = $this->partialLine($table, $text, $words, $tableHeader, $page['number']);
+                    if ($partial !== null) { $result['lineCandidates'][] = $partial; }
+                }
+                $rowPatterns = $patterns;
+                if (preg_match('/^Rechnung$/iu', $previousText) && preg_match('/^Nummer\s*:/iu', $text)) {
+                    $rowPatterns['invoice.number'] = '/^Nummer\s*:\s*((?=[A-Z0-9\/._-]*\d)[A-Z0-9\/._-]+)\s+vom\b/iu';
+                    $rowPatterns['invoice.date'] = '/^Nummer\s*:\s*\S+\s+vom\s+(\d{2}\.\d{2}\.\d{4})/iu';
+                } elseif ($words[0]['box'][1] < $page['height'] * 0.4 && preg_match('/\bRechnung/iu', implode(' ', array_column($page['words'], 'text')))) {
+                    $rowPatterns['invoice.date'] = '/\b(?:Rechnungsdatum|Belegdatum|(?<![\pL])Datum)\s*:?\s*(\d{2}\.\d{2}\.\d{4})/iu';
+                }
+                foreach ($rowPatterns as $key => $pattern) {
                     if (!preg_match($pattern, $text, $m)) { continue; }
                     $value = $m[1];
+                    if ($key === 'invoice.currency' && $value === '€') { $value = 'EUR'; }
+                    if ($key === 'payment.iban') {
+                        $value = preg_replace('/\s+/', '', $value);
+                        if (!$this->validIban($value)) { $value = null; }
+                    }
                     if (strpos($key, 'totals.') === 0) { $value = self::decimal($value); }
                     if (strpos($key, 'Date') !== false || $key === 'invoice.date') {
                         $date = \DateTimeImmutable::createFromFormat('!d.m.Y', $value);
@@ -42,6 +69,7 @@ final class InvoiceExtractor
                     if ($value === null) { $candidate['status'] = 'invalid'; }
                     $result['fields'][$key]['candidates'][] = $candidate;
                 }
+                $previousText = $text;
                 // Supported prototype row: position, description, quantity, unit, net price, explicit tax %, net amount.
                 if (preg_match('/^(\d+)\s+(.+?)\s+(-?\d+(?:,\d+)?)\s+(Stk\.?|Std\.?|kg|m|Stück)\s+(-?[\d.]+,\d{2,4})\s+(\d+(?:,\d+)?)\s*%\s+(-?[\d.]+,\d{2})(?:\s+EUR)?$/u', $text, $m)) {
                     $line = [];
@@ -63,8 +91,18 @@ final class InvoiceExtractor
             $field['value'] = !$conflict ? $field['candidates'][0]['value'] : null;
         }
         unset($field);
+        if (isset($result['fields']['invoice.number']) && $result['fields']['invoice.number']['status'] === 'conflict') {
+            $result['warnings'][] = 'Mehrere Rechnungsnummern: mögliche Anlagen oder mehrere Rechnungen in einer PDF. Keine automatische Zusammenführung.';
+        }
+        if ($result['lineCandidates']) {
+            $result['warnings'][] = 'Unvollständige Positionskandidaten erkannt: Beschreibung kann Folgezeilen haben. Unbekannte Preisbasis bleibt offen; keine Übernahme in Netto-/Steuerprüfungen.';
+        }
         foreach (['invoice.number', 'invoice.date', 'invoice.currency', 'seller.name', 'buyer.name', 'totals.net', 'totals.tax', 'totals.gross'] as $key) {
             if (!isset($result['fields'][$key])) { $result['fields'][$key] = ['value' => null, 'status' => 'missing', 'candidates' => []]; }
+        }
+        $result['documentStatus'] = $result['fields']['invoice.number']['status'] === 'conflict' ? 'ambiguous_invoice_identity' : (($result['fields']['invoice.number']['candidates'] || $result['fields']['totals.gross']['candidates']) ? 'invoice_candidate' : 'unclassified');
+        if ($result['documentStatus'] === 'unclassified') {
+            $result['warnings'][] = 'Keine hinreichenden Rechnungsmerkmale erkannt. Mögliches Anschreiben oder nicht unterstütztes Layout; Dokumenttyp manuell prüfen.';
         }
         $this->check($result, 'net_plus_tax', ['totals.net', 'totals.tax', 'totals.gross']);
         $net = '0'; $taxes = [];
@@ -89,6 +127,41 @@ final class InvoiceExtractor
     private function round(string $number): string
     {
         return bcadd($number, bccomp($number, '0', 8) < 0 ? '-0.005' : '0.005', 2);
+    }
+
+    private function validIban(string $iban): bool
+    {
+        if (!preg_match('/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/D', $iban) || (substr($iban, 0, 2) === 'DE' && strlen($iban) !== 22)) { return false; }
+        $rotated = substr($iban, 4) . substr($iban, 0, 4);
+        $digits = preg_replace_callback('/[A-Z]/', function ($m) { return (string) (ord($m[0]) - 55); }, $rotated);
+        return bcmod($digits, '97') === '1';
+    }
+
+    private function partialLine(string $table, string $text, array $words, array $header, int $page): ?array
+    {
+        $patterns = [
+            'quantity_article' => '/^(\d+)\s+(\d+(?:,\d+)?)\s+(\S+)\s+(.+?)\s+(-?[\d.]+,\d{2,4})\s*€\s+(-?[\d.]+,\d{2})\s*€$/u',
+            'ticket' => '/^(.+?)\s+(-?[\d.]+,\d{2})\s*€\s+(\d+(?:,\d+)?)\s+(-?[\d.]+,\d{2})\s*€$/u',
+            'service_period' => '/^(\d+)\s+(.+?)\s+(\d{2}\.\d{2}\.\d{4}-\d{2}\.\d{2}\.\d{4})\s+(-?[\d.]+,\d{2})\s+(\d+(?:,\d+)?)\s*%$/u',
+            'net_amount' => '/^(\d+)\.\s+(.+?)\s+(-?[\d.]+,\d{2})\s*€$/u',
+            'article_amount' => '/^Artikel:\s+(.+?)\s+(-?[\d.]+,\d{2})\s*€$/u',
+        ];
+        if (!preg_match($patterns[$table], $text, $m)) { return null; }
+        $maps = [
+            'quantity_article' => ['id' => 1, 'quantity' => 2, 'articleNumber' => 3, 'description' => 4, 'unitPrice' => 5, 'amount' => 6],
+            'ticket' => ['description' => 1, 'unitPrice' => 2, 'quantity' => 3, 'amount' => 4],
+            'service_period' => ['contractNumber' => 1, 'description' => 2, 'servicePeriod' => 3, 'amount' => 4, 'taxRate' => 5],
+            'net_amount' => ['id' => 1, 'description' => 2, 'amount' => 3],
+            'article_amount' => ['description' => 1, 'amount' => 2],
+        ];
+        $fields = [];
+        foreach ($maps[$table] as $key => $index) {
+            $value = in_array($key, ['quantity', 'unitPrice', 'amount', 'taxRate'], true) ? self::decimal($m[$index]) : $m[$index];
+            $fields[$key] = $this->evidence($value, $m[$index], $text, $page, $words);
+        }
+        // Only the explicit Netto heading establishes a net amount. Other totals
+        // must not be converted or treated as net prices from arithmetic alone.
+        return ['status' => 'incomplete', 'rule' => $table, 'amountBasis' => $table === 'net_amount' ? 'net' : 'unknown', 'headerEvidence' => $this->evidence(implode(' ', array_column($header, 'text')), implode(' ', array_column($header, 'text')), implode(' ', array_column($header, 'text')), $page, $header), 'fields' => $fields, 'missingFields' => array_values(array_diff(['description', 'quantity', 'unit', 'unitPrice', 'taxRate'], array_keys($fields)))];
     }
 
     private function comparison(string $name, string $expected, ?string $actual): array

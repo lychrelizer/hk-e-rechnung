@@ -12,6 +12,7 @@
 </div>
 <?php if ($error): ?><div class="errors"><?= $e($error) ?></div><?php endif; ?>
 <?php if ($report): ?>
+<div class="card"><strong>Dokumentstatus: <?= $e($report['documentStatus']) ?></strong><p>invoice_candidate = mögliche Rechnung; ambiguous_invoice_identity = widersprüchliche Rechnungsidentität; unclassified = Dokumenttyp offen. Dies ist keine fachliche Bestätigung.</p></div>
 <div class="card"><h2>Hinweise</h2><ul><?php foreach ($report['warnings'] as $warning): ?><li><?= $e($warning) ?></li><?php endforeach; ?></ul></div>
 <div class="card" style="overflow:auto"><h2>Felder und Fundstellen</h2>
 <p>needs_review = zu prüfen · missing = fehlt · conflict = widersprüchlich · invalid = ungültig. Fundstellen sind Zeilenrechtecke in PDF-Punkten ab links oben.</p>
@@ -27,5 +28,9 @@
 <div class="card"><h2>Erkannte Positionen</h2>
 <?php if (!$report['lines']): ?><p>Keine Positionen sicher im unterstützten Tabellenformat zugeordnet.</p><?php endif; ?>
 <?php foreach ($report['lines'] as $line): ?><pre style="white-space:pre-wrap"><?= $e(json_encode($line, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre><?php endforeach; ?></div>
+<?php if (!empty($report['lineCandidates'])): ?>
+<div class="card"><h2>Unvollständige Positionskandidaten</h2><p>Fehlende Angaben und unbekannte Preisbasis müssen geprüft werden. Diese Kandidaten fließen nicht in die Netto- und Steuerprüfungen ein.</p>
+<?php foreach ($report['lineCandidates'] as $line): ?><pre style="white-space:pre-wrap"><?= $e(json_encode($line, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre><?php endforeach; ?></div>
+<?php endif; ?>
 <div class="card"><details><summary>Vollständiger Prüfbericht mit Wortkoordinaten</summary><pre style="white-space:pre-wrap"><?= $e(json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre></details></div>
 <?php endif; ?>

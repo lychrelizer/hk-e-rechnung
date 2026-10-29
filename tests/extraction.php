@@ -7,7 +7,7 @@ use App\Extraction\PdfTextReader;
 function expect($condition, string $message): void {
     if (!$condition) { throw new RuntimeException($message); }
 }
-$dir = __DIR__ . '/fixtures';
+$dir = sys_get_temp_dir() . '/invoice-tests-' . bin2hex(random_bytes(8));
 if (!is_dir($dir)) { mkdir($dir, 0700, true); }
 function fixture(string $path, array $rows): void {
     $pdf = new FPDF();
@@ -39,7 +39,6 @@ $mixed = $extractor->extract($reader->read($dir . '/mixed-tax.pdf'));
 expect($mixed['fields']['totals.tax']['status'] === 'conflict', 'Multiple tax amounts not collapsed');
 expect($mixed['checks'][0]['status'] === 'not_checkable', 'Ambiguous tax not checked as certain');
 PdfTextReader::command(['pdftoppm', '-scale-to', '2500', '-singlefile', '-png', $dir . '/digital.pdf', $dir . '/scan']);
-$image = getimagesize($dir . '/scan.png');
 $pdf = new FPDF(); $pdf->AddPage(); $pdf->Image($dir . '/scan.png', 0, 0, 210, 297); $pdf->Output('F', $dir . '/scan.pdf');
 $scanPages = $reader->read($dir . '/scan.pdf');
 $scan = $extractor->extract($scanPages);
@@ -58,3 +57,5 @@ $e = function ($value) { return htmlspecialchars((string) $value, ENT_QUOTES | E
 ob_start(); require dirname(__DIR__) . '/templates/extraction.php'; $html = ob_get_clean();
 expect(strpos($html, 'RE-2026-001') !== false && strpos($html, 'needs_review') !== false, 'Review template renders evidence');
 echo "OK: digital PDF, scan/OCR, mixed tax ambiguity, contradictions, provenance, arithmetic, missing values\n";
+foreach (glob($dir . '/*') as $generatedFile) { unlink($generatedFile); }
+rmdir($dir);
