@@ -38,6 +38,7 @@ $categories = ['S' => 'S – Regelbesteuerung', 'Z' => 'Z – Nullsatz', 'E' => 
 <?php endif; ?>
 
 <form method="post" action="/convert" enctype="multipart/form-data" id="invoice-form">
+<div class="card"><a href="/extract">PDF-Rechnung lokal auslesen und Erkennung prüfen</a></div>
 
 <div class="card">
   <h2>1. Original-Rechnung (PDF) hochladen</h2>

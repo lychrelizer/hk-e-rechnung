@@ -80,6 +80,10 @@ function route(Request $request, ZugferdService $zugferd, BasicAuth $auth): Resp
 
     $web = new WebController($zugferd, dirname(__DIR__) . '/templates');
 
+    if ($path === '/extract' && in_array($method, ['GET', 'POST'], true)) {
+        return $web->extract($request);
+    }
+
     if ($path === '/' && $method === 'GET') {
         return $web->form($request);
     }

@@ -35,6 +35,29 @@ final class WebController
         ]);
     }
 
+    public function extract(Request $request): Response
+    {
+        $report = null;
+        $error = null;
+        if ($request->method === 'POST') {
+            try {
+                $file = $request->files['pdf'] ?? [];
+                if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || !is_uploaded_file($file['tmp_name'])) {
+                    throw new \RuntimeException('Bitte eine PDF-Datei hochladen (maximal 20 MiB).');
+                }
+                $pages = (new \App\Extraction\PdfTextReader())->read($file['tmp_name'], isset($request->post['forceOcr']));
+                $report = (new \App\Extraction\InvoiceExtractor())->extract($pages);
+                $report['sourceSha256'] = hash_file('sha256', $file['tmp_name']);
+                if (isset($request->post['download'])) {
+                    return Response::file((string) json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), 'extraktion.json', 'application/json');
+                }
+            } catch (\Throwable $e) {
+                $error = $e->getMessage();
+            }
+        }
+        return $this->render('extraction', ['report' => $report, 'error' => $error], $error ? 422 : 200);
+    }
+
     public function convert(Request $request): Response
     {
         $values = $request->post;
